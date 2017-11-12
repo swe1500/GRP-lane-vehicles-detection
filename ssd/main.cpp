@@ -17,6 +17,9 @@
 using namespace std;
 using namespace caffe;
 
+const string label[21] ={"background","aeroplane","bicycle","bird","boat","bottle","bus","car","cat","chair","cow",
+                         "diningtable","dog","horse","motorbike","person","pottedplant","sheep","sofa","train","tvmonitor"};
+
 class Detector{
 private:
     shared_ptr<Net<float> > net_;
@@ -221,7 +224,7 @@ void Detector::SetMean(const string& mean_file, const string& mean_value) {
         cv::GaussianBlur(L_plane,L_plane,cv::Size(11,11),5,5);
         cv::GaussianBlur(s_plane,s_plane,cv::Size(11,11),5,5);
         cv::threshold(L_plane,L_plane,170.0,200.0,cv::THRESH_BINARY);
-        cv::threshold(s_plane,s_plane,115.0,200.0,cv::THRESH_BINARY);
+        cv::threshold(s_plane,s_plane,155.0,200.0,cv::THRESH_BINARY);
         cv::Canny(s_plane,s_plane,110,95);
 
         s_plane = cv::max(s_plane,L_plane);
@@ -322,12 +325,11 @@ int main()
     const string& weights_file = "/home/cookie/ssd/ssd/VGG_VOC0712_SSD_300x300_iter_120000.caffemodel";
     Detector detector(model_file,weights_file);
 
-    CvCapture* g_capture = NULL;
-
     cv::VideoCapture capture("project_video.mp4");
         if(!capture.isOpened())
             return 1;
     cv::Mat frame;
+    cv::Mat imageUncharged;
 
     capture.read(frame);
     vector<float> line_L,line_R;
@@ -336,14 +338,36 @@ int main()
         y       = frame.rows * 5/8;
 
     while(capture.read(frame)){
+        frame.copyTo(imageUncharged);
         std::vector<vector<float> > detections = detector.Detect(frame);
 
+
         /****** Traffic Lane Detection ******/
+        /***
         LaneDetection(frame, &line_L, &line_R);
         if(line_L.size() != 0)
-            cv::line(frame,cv::Point(x+line_L[0],y+line_L[1]),cv::Point(x+line_L[2],y+line_L[3]),cv::Scalar(0,255,0),8);
+            cv::line(frame,cv::Point(x+line_L[0],y+line_L[1]),cv::Point(x+line_L[2],y+line_L[3]),cv::Scalar(40,230,60),8);
         if(line_R.size() != 0)
-            cv::line(frame,cv::Point(x+line_R[0],y+line_R[1]),cv::Point(x+line_R[2],y+line_R[3]),cv::Scalar(0,255,0),8);
+            cv::line(frame,cv::Point(x+line_R[0],y+line_R[1]),cv::Point(x+line_R[2],y+line_R[3]),cv::Scalar(40,230,60),8);
+            ***/
+
+        vector<cv::Point> points;
+        vector<vector<cv::Point> > ptrs;
+         LaneDetection(frame, &line_L, &line_R);
+
+        if(line_L.size()!=0 && line_R.size()!=0){
+            points.push_back(cv::Point((int)(x+line_L[0]),(int)(y+line_L[1])));
+            points.push_back(cv::Point((int)(x+line_L[2]),(int)(y+line_L[3])));
+            points.push_back(cv::Point((int)(x+line_R[2]),(int)(y+line_R[3])));
+            points.push_back(cv::Point((int)(x+line_R[0]),(int)(y+line_R[1])));
+            ptrs.push_back(points);
+
+
+            cv::polylines(frame,points,true,cv::Scalar(100,220,60),8);
+            cv::fillPoly(frame,ptrs,cv::Scalar(100,200,0));
+
+            cv::addWeighted(imageUncharged,0.5,frame,0.5,1,frame);
+        }
         /***********************************/
 
         for (unsigned int i = 0; i < detections.size(); ++i) {
@@ -351,23 +375,24 @@ int main()
             CHECK_EQ(d.size(), 7);
             const float score = d[2];
             if (score>0.6){
- //           cout << file << "_";
- //           cout << std::setfill('0') << std::setw(6) << 0 << " ";
- //           cout << static_cast<int>(d[1]) << " ";
- //           cout << score << " ";
- //           cout << static_cast<int>(d[3] * frame.cols) << " ";
- //           cout << static_cast<int>(d[4] * frame.rows) << " ";
- //           cout << static_cast<int>(d[5] * frame.cols) << " ";
- //           cout << static_cast<int>(d[6] * frame.rows) << std::endl;
+//            cout << file << "_";
+//            cout << std::setfill('0') << std::setw(6) << 0 << " ";
+//            cout << static_cast<int>(d[1]) << " ";
+//            cout << score << " ";
+//            cout << static_cast<int>(d[3] * frame.cols) << " ";
+//            cout << static_cast<int>(d[4] * frame.rows) << " ";
+//            cout << static_cast<int>(d[5] * frame.cols) << " ";
+//            cout << static_cast<int>(d[6] * frame.rows) << std::endl;
             CvPoint x1(d[3] * frame.cols,d[4] * frame.rows),x2(d[5] * frame.cols,d[6] * frame.rows);
-            cv::rectangle(frame,x1,x2,cv::Scalar(255,0,0),4,1,0);
+            cv::rectangle(frame,x1,x2,cv::Scalar(240,30,0),4,1,0);
 
             stringstream stream;
             //stream << fixed << setprecision(4) << d[1];
             //string s = stream.str();
-            stream << fixed << setprecision(4) << d[2];
-            string tag = stream.str();
-            cv::putText(frame,tag,CvPoint(d[3] * frame.cols,d[4] * frame.rows-10),2,1,cv::Scalar(255,0,0));
+            stream << fixed << setprecision(2) << d[2];
+            string tag = label[static_cast<int>(d[1])];
+            tag = tag + " " + stream.str();
+            cv::putText(frame,tag,CvPoint(d[3] * frame.cols,d[4] * frame.rows-10),2,1,cv::Scalar(240,30,0));
 
             }
         }
@@ -377,7 +402,6 @@ int main()
 
     }
     capture.release();
-    cvReleaseCapture(&g_capture);
     return 0;
 }
 
