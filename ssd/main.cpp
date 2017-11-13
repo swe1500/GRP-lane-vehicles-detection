@@ -208,23 +208,26 @@ void Detector::SetMean(const string& mean_file, const string& mean_value) {
                       vector<double>*  l_b,
                       vector<double>*  r_b) {
 
-        cv::Mat dst;
+        cv::Mat dst,dst_HSL;
         cv::Mat s_plane,L_plane;
         int x       = imageOrg.cols * 6/32,
             y       = imageOrg.rows * 5/8,
             width   = imageOrg.cols * 22/32,
             height  = imageOrg.rows * 3/8;
-        cv::cvtColor(imageOrg,dst,CV_RGB2HLS);
+        cv::cvtColor(imageOrg,dst,CV_RGB2Lab);
+        cv::cvtColor(imageOrg,dst_HSL,CV_RGB2YCrCb);
         cv::Mat imageROI(dst,cv::Rect(x,y,width,height));
-        vector<cv::Mat> temp;
+        cv::Mat imageROI_HSL(dst_HSL,cv::Rect(x,y,width,height));
+        vector<cv::Mat> temp,temp_HSL;
         cv::split(imageROI,temp);
-        L_plane = temp[1];
+        cv::split(imageROI_HSL,temp_HSL);
+        L_plane = temp_HSL[0];
         s_plane = temp[2];
 
         cv::GaussianBlur(L_plane,L_plane,cv::Size(11,11),5,5);
         cv::GaussianBlur(s_plane,s_plane,cv::Size(11,11),5,5);
-        cv::threshold(L_plane,L_plane,170.0,200.0,cv::THRESH_BINARY);
-        cv::threshold(s_plane,s_plane,155.0,200.0,cv::THRESH_BINARY);
+        cv::threshold(L_plane,L_plane,200.0,250.0,cv::THRESH_BINARY);
+        cv::threshold(s_plane,s_plane,105.0,120.0,cv::THRESH_BINARY);
         cv::Canny(s_plane,s_plane,110,95);
 
         s_plane = cv::max(s_plane,L_plane);
