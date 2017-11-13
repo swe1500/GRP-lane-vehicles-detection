@@ -44,6 +44,7 @@ public:
 
 }; //Detector
 
+
 void Detector::SetMean(const string& mean_file, const string& mean_value) {
   cv::Scalar channel_mean;
   if (!mean_file.empty()) {
@@ -100,6 +101,7 @@ void Detector::SetMean(const string& mean_file, const string& mean_value) {
     cv::merge(channels, mean_);
   }
 }
+
 
     Detector::Detector(const string& model_file,
                        const string& weights_file,
@@ -200,63 +202,88 @@ void Detector::SetMean(const string& mean_file, const string& mean_value) {
         << "Input channels are not wrapping the input layer of the network.";
     }
 
-    void preLineHough(cv::Mat imageOrg,
-                      vector<cv::Vec4i>* Leftline,
-                      vector<cv::Vec4i>* Rightline,
-                      vector<double>*   l_slope,
-                      vector<double>*   r_slope,
-                      vector<double>*  l_b,
-                      vector<double>*  r_b) {
 
-        cv::Mat dst,dst_HSL;
-        cv::Mat s_plane,L_plane;
+    /*******      Traffic Lane Detection      ********/
+
+
+    /** @brief Preprocess the raw image and denoise.
+
+    @param imageOrg Original image or video frame.
+    @param Leftline An output array used to hold the set of the left lines detected by Hough.
+    @param Rightline An output array used to hold the set of the right lines detected by Hough.
+    @param l_slope An output array used to hold the set of the slope of the left lines.
+    @param r_slope An output array used to hold the set of the slope of the right lines.
+    @param l_b An output array used to hold the set of the y intersect of the left lines.
+    @param r_b An output array used to hold the set of the y intersect of the right lines.
+     */
+    void preLineHough(cv::Mat imageOrg,
+                      vector<cv::Vec4i>*  Leftline,
+                      vector<cv::Vec4i>*  Rightline,
+                      vector<double>*     l_slope,
+                      vector<double>*     r_slope,
+                      vector<double>*     l_b,
+                      vector<double>*     r_b) {
+        /*** Define two spaces for separating the color space ***/
+        cv::Mat     dst_Lab,dst_YCrCb;
+        cv::Mat     b_plane,Y_plane;
+
+        /*** Define ROI ***/
         int x       = imageOrg.cols * 6/32,
             y       = imageOrg.rows * 5/8,
             width   = imageOrg.cols * 22/32,
             height  = imageOrg.rows * 3/8;
-        cv::cvtColor(imageOrg,dst,CV_RGB2Lab);
-        cv::cvtColor(imageOrg,dst_HSL,CV_RGB2YCrCb);
-        cv::Mat imageROI(dst,cv::Rect(x,y,width,height));
-        cv::Mat imageROI_HSL(dst_HSL,cv::Rect(x,y,width,height));
-        vector<cv::Mat> temp,temp_HSL;
-        cv::split(imageROI,temp);
-        cv::split(imageROI_HSL,temp_HSL);
-        L_plane = temp_HSL[0];
-        s_plane = temp[2];
 
-        cv::GaussianBlur(L_plane,L_plane,cv::Size(11,11),5,5);
-        cv::GaussianBlur(s_plane,s_plane,cv::Size(11,11),5,5);
-        cv::threshold(L_plane,L_plane,200.0,250.0,cv::THRESH_BINARY);
-        cv::threshold(s_plane,s_plane,105.0,120.0,cv::THRESH_BINARY);
-        cv::Canny(s_plane,s_plane,110,95);
+        /*** Convert the image to 'lab' and 'YCrCb' color spaces ***/
+        cv::cvtColor(imageOrg, dst_Lab,   CV_RGB2Lab);
+        cv::cvtColor(imageOrg, dst_YCrCb, CV_RGB2YCrCb);
 
-        s_plane = cv::max(s_plane,L_plane);
+        cv::Mat imageROI_Lab(dst_Lab, cv::Rect(x, y, width, height));   // The b plane is good at extracting the yellow line
+        cv::Mat imageROI_YCrCb(dst_YCrCb,cv::Rect(x, y, width, height));// The Y plane is good at extracting the White line and get rid of while color in environment
 
-        vector<cv::Vec4i> lines;
-        vector<cv::Vec4i> res;
 
-        cv::HoughLinesP(s_plane,lines,1,CV_PI/180,80,50,5);
+        vector<cv::Mat> Space_Lab,Space_YCrCb;
+        cv::split(imageROI_Lab, Space_Lab);                             // Spilt the 3 channel color space into three separate plane
+        cv::split(imageROI_YCrCb, Space_YCrCb);                         // However, we only use one of them for each color space.
+        Y_plane = Space_YCrCb[0];
+        b_plane = Space_Lab[2];
+
+
+        cv::GaussianBlur(Y_plane, Y_plane, cv::Size(11,11),5,5);        // Apply Gaussian Filter to get rid of pepper and salt noise
+        cv::GaussianBlur(b_plane, b_plane, cv::Size(11,11),5,5);        // For both pictures that we derived
+        cv::threshold(Y_plane, Y_plane, 200.0, 250.0, cv::THRESH_BINARY);// Implement thresh, results are binary images.
+        cv::threshold(b_plane, b_plane, 105.0, 120.0, cv::THRESH_BINARY);
+        cv::Canny(b_plane, b_plane,110,95);                              // Implement Canny Edge detection
+        cv::Canny(Y_plane, Y_plane,110,95);
+
+
+        b_plane = cv::max(b_plane, Y_plane);                            // For the images that derived above, b_plane hold the information of yellow line,
+
+        vector<cv::Vec4i> lines;                                        // Y_plane hold the information of white line. So take max out of these two images,
+        vector<cv::Vec4i> res;                                          // can combine these two binary images into one.
+
+        cv::HoughLinesP(b_plane,lines, 1, CV_PI/180, 80, 50,5);         // Implement Hough transfrom. Result is a set of detected lines.
         vector<cv::Vec4i>::const_iterator it=lines.begin();
-        while(it!=lines.end()){
-            int dx = (*it)[0] - (*it)[2];
+
+        while (it!=lines.end()) {
+            int dx = (*it)[0] - (*it)[2];                               // Reconstruct the line.
             int dy = (*it)[1] - (*it)[3];
-            double angle = atan2(dy,dx) * 180 /CV_PI;
-            double k_    = (double)dy/dx;
+            double angle = atan2(dy, dx) * 180 /CV_PI;
+            double k_    = (double)dy/ dx;                              // k_ represents the slope of the line.
             double b     = -k_* (*it)[0] + (*it)[1];
 
-            if(abs(angle) <= 10 || dx == 0){
+            if (abs(angle) <= 10 || dx == 0) {                          // Eliminate the verticial lines and horizontal lines
                 ++it;
                 continue;
             }
 
-            if ((*it)[1] > (*it)[3] + 50 || (*it)[1] < (*it)[3] - 50){
+            if ((*it)[1] > (*it)[3] + 50 || (*it)[1] < (*it)[3] - 50) { // Roar filter the lines.
                 res.push_back(*it);
-                if(k_<0){
+                if (k_ < 0) {                                           // Separate left lines and right lines, for next filting step
                     Leftline->push_back(*it);
                     l_slope->push_back(angle);
                     l_b->push_back(b);
                 }
-                else if(k_>0){
+                else if (k_ > 0) {
                     Rightline->push_back(*it);
                     r_slope->push_back(angle);
                     r_b->push_back(b);
@@ -264,8 +291,15 @@ void Detector::SetMean(const string& mean_file, const string& mean_value) {
             }
             ++it;
          }
-    }           //PrelineHough
+    }              //PrelineHough
 
+
+    /** @brief Remove the outlier lines by comparing slope and y intersection.
+
+    @param Lines A set of lines from the right or the left.
+    @param angle The corresponding set of the angle for the above line set.
+    @param b_ The corresponding set of the y intersection for the line set.
+     */
     vector<cv::Vec4i> LineFilter(vector<cv::Vec4i> lines, vector<double> angle, vector<double> b_){
 
         cv::Scalar meanValue = cv::mean(angle);
@@ -274,51 +308,58 @@ void Detector::SetMean(const string& mean_file, const string& mean_value) {
         float b_average = mean_b.val[0];
         float angle_thres = 10, d_thres = 120;
 
-        for(unsigned int i = 0;i<lines.size();i++){
-            if(abs(angle[i]-Slope_average)>angle_thres || abs(b_[i]-b_average)>d_thres)
+        for(unsigned int i = 0;i < lines.size();i++){
+            if(abs(angle[i] - Slope_average) > angle_thres || abs(b_[i] - b_average) > d_thres)
             {
-                lines.erase(lines.begin()+i);
-                angle.erase(angle.begin()+i);
-                b_.erase(b_.begin()+i);
+                lines.erase(lines.begin() + i);
+                angle.erase(angle.begin() + i);
+                b_.erase(b_.begin() + i);
                 i--;
             }
         }
         return lines;
-    }       //LineFilter
+    }                 //LineFilter
 
+
+    /** @brief Fit a straight line and restrict the line in ROI range.
+
+    @param Lines A set of lines, outlier lines have been removed from this set.
+    @param ymin The upper range.
+    @param ymax The bottom range.
+     */
     vector<float> findLine(vector<cv::Vec4i> Lines, int ymin, int ymax){
         vector<cv::Point> points;
-        vector<cv::Vec4i>::const_iterator it=Lines.begin();
+        vector<cv::Vec4i>::const_iterator it = Lines.begin();
         while(it!=Lines.end()){
-            points.push_back(cv::Point((*it)[0],(*it)[1]));
-            points.push_back(cv::Point((*it)[2],(*it)[3]));
+            points.push_back(cv::Point((*it)[0], (*it)[1]));
+            points.push_back(cv::Point((*it)[2], (*it)[3]));
             ++it;
         }
         vector<float> Line;
         cv::fitLine(points,Line,CV_DIST_L2,1,0.01,0.01);
-        float k_ = Line[1]/Line[0];
-        float   xup = (ymin - Line[3])/k_ + Line[2];
-        float   xdown = (ymax - Line[3])/k_ + Line[2];
+        float k_ = Line[1] / Line[0];
+        float   xup = (ymin - Line[3]) / k_ + Line[2];
+        float   xdown = (ymax - Line[3]) / k_ + Line[2];
 
         Line[0] = xdown;
         Line[1] = ymax;
         Line[2] = xup;
         Line[3] = ymin;
         return Line;
-    }
+    }                   // findLine
 
     void LaneDetection(cv::Mat imageOrg, vector<float>* line_L, vector<float>* line_R){
         vector<cv::Vec4i> Leftline, Rightline;
-        vector<double>   l_slope, r_slope, l_b, r_b;
+        vector<double>    l_slope, r_slope, l_b, r_b;
 
-        preLineHough(imageOrg,&Leftline,&Rightline,&l_slope,&r_slope,&l_b,&r_b);
+        preLineHough(imageOrg, &Leftline, &Rightline, &l_slope, &r_slope, &l_b, &r_b);
         int height  = imageOrg.rows * 3/8;
-        Leftline = LineFilter(Leftline,l_slope,l_b);
-        Rightline = LineFilter(Rightline,r_slope,r_b);
+        Leftline = LineFilter(Leftline, l_slope, l_b);
+        Rightline = LineFilter(Rightline, r_slope, r_b);
         if(Leftline.size() != 0)
-        *line_L = findLine(Leftline,30,height-35);
+        *line_L = findLine(Leftline, 30, height-35);
         if(Rightline.size() != 0)
-        *line_R = findLine(Rightline,30,height-45);
+        *line_R = findLine(Rightline, 30, height-45);
     }
 
 int main()
@@ -326,7 +367,7 @@ int main()
 
     const string& model_file = "/home/cookie/ssd/ssd/deploy.prototxt";
     const string& weights_file = "/home/cookie/ssd/ssd/VGG_VOC0712_SSD_300x300_iter_120000.caffemodel";
-    Detector detector(model_file,weights_file);
+    Detector detector(model_file, weights_file);
 
     cv::VideoCapture capture("project_video.mp4");
         if(!capture.isOpened())
@@ -341,24 +382,16 @@ int main()
         y       = frame.rows * 5/8;
 
     while(capture.read(frame)){
+
         frame.copyTo(imageUncharged);
         std::vector<vector<float> > detections = detector.Detect(frame);
 
-
-        /****** Traffic Lane Detection ******/
-        /***
-        LaneDetection(frame, &line_L, &line_R);
-        if(line_L.size() != 0)
-            cv::line(frame,cv::Point(x+line_L[0],y+line_L[1]),cv::Point(x+line_L[2],y+line_L[3]),cv::Scalar(40,230,60),8);
-        if(line_R.size() != 0)
-            cv::line(frame,cv::Point(x+line_R[0],y+line_R[1]),cv::Point(x+line_R[2],y+line_R[3]),cv::Scalar(40,230,60),8);
-            ***/
-
+        /************ Traffic Lane Detection ************/
         vector<cv::Point> points;
         vector<vector<cv::Point> > ptrs;
          LaneDetection(frame, &line_L, &line_R);
 
-        if(line_L.size()!=0 && line_R.size()!=0){
+        if(line_L.size() != 0 && line_R.size() != 0){
             points.push_back(cv::Point((int)(x+line_L[0]),(int)(y+line_L[1])));
             points.push_back(cv::Point((int)(x+line_L[2]),(int)(y+line_L[3])));
             points.push_back(cv::Point((int)(x+line_R[2]),(int)(y+line_R[3])));
@@ -366,41 +399,33 @@ int main()
             ptrs.push_back(points);
 
 
-            cv::polylines(frame,points,true,cv::Scalar(100,220,60),8);
-            cv::fillPoly(frame,ptrs,cv::Scalar(100,200,0));
+            cv::polylines(frame, points, true, cv::Scalar(100,220,60), 8);
+            cv::fillPoly(frame, ptrs, cv::Scalar(100,200,0));
 
-            cv::addWeighted(imageUncharged,0.5,frame,0.5,1,frame);
+            cv::addWeighted(imageUncharged, 0.5, frame, 0.5, 1, frame);
         }
-        /***********************************/
+        /*********** Multiple Objects detection ***************/
 
         for (unsigned int i = 0; i < detections.size(); ++i) {
             const vector<float>& d = detections[i];
             CHECK_EQ(d.size(), 7);
             const float score = d[2];
-            if (score>0.6){
-//            cout << file << "_";
-//            cout << std::setfill('0') << std::setw(6) << 0 << " ";
-//            cout << static_cast<int>(d[1]) << " ";
-//            cout << score << " ";
-//            cout << static_cast<int>(d[3] * frame.cols) << " ";
-//            cout << static_cast<int>(d[4] * frame.rows) << " ";
-//            cout << static_cast<int>(d[5] * frame.cols) << " ";
-//            cout << static_cast<int>(d[6] * frame.rows) << std::endl;
+            if (score>0.6 && static_cast<int>(d[1]) == 7){
+
             CvPoint x1(d[3] * frame.cols,d[4] * frame.rows),x2(d[5] * frame.cols,d[6] * frame.rows);
-            cv::rectangle(frame,x1,x2,cv::Scalar(240,30,0),4,1,0);
+            cv::rectangle(frame, x1, x2, cv::Scalar(240,30,0), 4, 1, 0);
 
             stringstream stream;
-            //stream << fixed << setprecision(4) << d[1];
-            //string s = stream.str();
+
             stream << fixed << setprecision(2) << d[2];
             string tag = label[static_cast<int>(d[1])];
             tag = tag + " " + stream.str();
-            cv::putText(frame,tag,CvPoint(d[3] * frame.cols,d[4] * frame.rows-10),2,1,cv::Scalar(240,30,0));
+            cv::putText(frame, tag, CvPoint(d[3] * frame.cols,d[4] * frame.rows-10), 2, 1, cv::Scalar(240,30,0));
 
             }
         }
 
-        cv::imshow("im",frame);
+        cv::imshow("im", frame);
         cv::waitKey(1);
 
     }
